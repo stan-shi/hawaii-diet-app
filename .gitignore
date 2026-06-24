@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.ipynb_checkpoints/
+shopping_list.csv
+optimal_meal_plan.csv
+infeasible.ilp
+*.mp4
+*.gsheet
+*.gdoc
