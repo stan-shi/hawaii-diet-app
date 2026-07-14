@@ -121,8 +121,30 @@ MEALS        = ["breakfast", "lunch", "dinner"]
 N_MEALS      = len(MEALS)
 PER_FOOD_CAP = 5.0
 MIN_SERVING  = 0.3
-MEAL_CAL_MIN = 0.20
-MEAL_CAL_MAX = 0.45
+MEAL_CAL_TOL = 0.08   # ±8 pp tolerance around each meal target
+
+# ── vegetable detection ───────────────────────────────────────────────────────
+import re as _re
+
+_VEGGIE_KW = [
+    'broccoli','spinach','kale','lettuce','cabbage','carrot','tomato','pepper',
+    'cucumber','zucchini','squash','onion','garlic','celery','asparagus',
+    'edamame','mushroom','cauliflower','eggplant','chard','arugula','radish',
+    'beet','leek','artichoke','potato','yam','corn','pea','peas','vegetable',
+    'veggie','bok choy','taro','daikon','bean','lentil','chickpea','garbanzo',
+    'green bean','snap pea','sweet potato',
+]
+_EXCLUDE_KW = [
+    'bread','pasta','penne','rotini','rigatoni','spaghetti','macaroni',
+    'lasagna','noodle','tortilla','taco','shell','butter','salmon',
+    'chicken','cracker','pretzel','popcorn',
+]
+
+def _is_veggie(name):
+    nl = name.lower()
+    if any(_re.search(r'\b' + _re.escape(k) + r'\b', nl) for k in _EXCLUDE_KW):
+        return False
+    return any(_re.search(r'\b' + _re.escape(k) + r'\b', nl) for k in _VEGGIE_KW)
 
 _NUTR_COLS = [
     "kcal","protein_g","total_fat_g","sat_fat_g","trans_fat_g",
@@ -143,7 +165,8 @@ def load_food_matrix():
 
 
 # ── solver ────────────────────────────────────────────────────────────────────
-def _solve(df, band, floors, ceilings, max_days, min_foods):
+def _solve(df, band, floors, ceilings, max_days, min_foods,
+           veggie_idx, min_veggies, meal_targets):
     D = range(DAYS); M = range(N_MEALS); I = df.index
     prob = pulp.LpProblem("weekly_diet", pulp.LpMinimize)
 
@@ -172,12 +195,21 @@ def _solve(df, band, floors, ceilings, max_days, min_foods):
                                for i in I for ml in M) <= hi
         for ml in M:
             cal_meal = pulp.lpSum(df.loc[i, "kcal"] * x[i, d, ml] for i in I)
-            prob += cal_meal >= MEAL_CAL_MIN * cal_day
-            prob += cal_meal <= MEAL_CAL_MAX * cal_day
+            tgt = meal_targets[ml]
+            prob += cal_meal >= max(tgt - MEAL_CAL_TOL, 0.05) * cal_day
+            prob += cal_meal <= min(tgt + MEAL_CAL_TOL, 0.90) * cal_day
 
     for n, lo in floors.items():
         prob += pulp.lpSum(df.loc[i, n] * x[i, d, ml]
                            for i in I for d in D for ml in M) >= lo * DAYS
+
+    # ── min distinct vegetables per week ──────────────────────────────────────
+    if min_veggies > 0 and veggie_idx:
+        v = {i: pulp.LpVariable(f"v_{i}", cat="Binary") for i in veggie_idx}
+        for i in veggie_idx:
+            for d in D:
+                prob += v[i] >= z[i, d]   # v=1 if food i used on any day
+        prob += pulp.lpSum(v[i] for i in veggie_idx) >= min_veggies
 
     prob.solve(pulp.PULP_CBC_CMD(msg=False, timeLimit=60))
     return prob, x
@@ -222,6 +254,16 @@ with st.sidebar:
     st.subheader("Optimizer Parameters")
     min_foods = st.slider("Min distinct foods per day",  min_value=1, max_value=10, value=4)
     max_days  = st.slider("Max days a food may appear",  min_value=1, max_value=7,  value=6)
+    min_veggies = st.slider("Min different vegetables per week", min_value=0, max_value=10, value=3)
+
+    st.divider()
+    st.subheader("Meal Calorie Split")
+    b_raw = st.slider("Breakfast %", min_value=10, max_value=60, value=25)
+    l_raw = st.slider("Lunch %",     min_value=10, max_value=60, value=35)
+    d_raw = st.slider("Dinner %",    min_value=10, max_value=60, value=40)
+    _tot = b_raw + l_raw + d_raw
+    meal_targets = (b_raw / _tot, l_raw / _tot, d_raw / _tot)
+    st.caption(f"Normalized → B {meal_targets[0]*100:.0f}% · L {meal_targets[1]*100:.0f}% · D {meal_targets[2]*100:.0f}%")
 
     st.divider()
     run = st.button("Generate 7-Day Plan", type="primary", width="stretch")
@@ -246,19 +288,24 @@ if not run:
     st.stop()
 
 df = load_food_matrix()
+veggie_idx = [i for i in df.index if _is_veggie(df.loc[i, "name"])]
+
 targets = profile_to_targets(
     age=age, sex=sex, height_cm=height, weight_kg=weight,
     activity=activity, protein_g_per_kg=protein_ratio, goal=goal,
 )
 
-with st.spinner("Solving… this usually takes 15–60 seconds."):
+with st.spinner("Solving… this usually takes a few seconds."):
     prob, x = _solve(
         df,
-        band      = targets["CALORIE_BAND"],
-        floors    = targets["FLOORS"],
-        ceilings  = targets["CEILINGS"],
-        max_days  = max_days,
-        min_foods = min_foods,
+        band        = targets["CALORIE_BAND"],
+        floors      = targets["FLOORS"],
+        ceilings    = targets["CEILINGS"],
+        max_days    = max_days,
+        min_foods   = min_foods,
+        veggie_idx  = veggie_idx,
+        min_veggies = min_veggies,
+        meal_targets= meal_targets,
     )
 
 status = pulp.LpStatus[prob.status]
