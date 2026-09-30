@@ -9,10 +9,14 @@ Deploy:
     Embed on your own page with an <iframe>.
 """
 import math
+from pathlib import Path
+
 import pandas as pd
 import pulp
 import streamlit as st
 from profile_to_targets import profile_to_targets
+
+APP_DIR = Path(__file__).parent
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -156,7 +160,7 @@ _NUTR_COLS = [
 # ── data loading (cached so CSV is read once) ─────────────────────────────────
 @st.cache_data
 def load_food_matrix():
-    df = pd.read_csv("food_matrix.csv")
+    df = pd.read_csv(APP_DIR / "food_matrix.csv")
     df[_NUTR_COLS] = df[_NUTR_COLS].fillna(0.0)
     df = df.dropna(subset=["price", "net_weight_g", "kcal"]).reset_index(drop=True)
     df["unit_price"] = df["price"] / (df["net_weight_g"] / 100.0)
@@ -217,7 +221,7 @@ def _solve(df, band, floors, ceilings, max_days, min_foods,
 
 # ── sidebar inputs ────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.image("HILO/color/left.png", width=260)
+    st.image(str(APP_DIR / "HILO" / "color" / "left.png"), width=260)
     st.caption("Undergraduate Research Program · Spring 2026 · College of Business and Economics")
     st.divider()
 
